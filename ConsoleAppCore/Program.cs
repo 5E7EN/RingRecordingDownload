@@ -249,6 +249,9 @@ namespace KoenZomers.Ring.RecordingDownload
                 await Task.Delay(1000);
                 var startTime = DateTime.Now;
 
+                // Ensure the downloads directory exists by creating it
+                Directory.CreateDirectory(configuration.OutputPath);
+
                 // Sort videos by oldest to newest (to start downloading the oldest items first)
                 var sortedDoorbotHistory = doorbotHistory.OrderBy(h => h.CreatedAtDateTime).ToList();
 
@@ -328,7 +331,7 @@ namespace KoenZomers.Ring.RecordingDownload
 
                 // Calculate and display the time taken for all video downloads
                 var elapsedTime = DateTime.Now - startTime;
-                Log($"Finished in {(int)elapsedTime.TotalSeconds} seconds.");
+                Log($"Finished downloading {doorbotHistory.Count} items{(doorbotHistory.Count == 1 ? "" : "s")} in {(int)elapsedTime.TotalSeconds} seconds.");
                 Environment.Exit(0);
             }
         }
