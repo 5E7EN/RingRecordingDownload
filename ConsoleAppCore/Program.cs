@@ -6,11 +6,26 @@ using System.Reflection;
 using System.Linq;
 using System.IO;
 using System.Threading.Tasks;
+using System.Threading;
+using System.Collections.Concurrent;
 
 namespace KoenZomers.Ring.RecordingDownload
 {
     class Program
     {
+        // Initialize semaphore for managing concurrent tasks 
+        static SemaphoreSlim semaphoreSlim = new SemaphoreSlim(10); // Allows up to 10 concurrent tasks
+        // Log queue
+        static ConcurrentQueue<string> logQueue = new ConcurrentQueue<string>();
+
+        static void Log(string message)
+        {
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            var logMessage = $"[{timestamp}] - {message}";
+            Console.WriteLine(logMessage);
+            logQueue.Enqueue(logMessage);
+        }
+
         /// <summary>
         /// Refresh token to use to authenticate to the Ring API
         /// </summary>
@@ -97,7 +112,7 @@ namespace KoenZomers.Ring.RecordingDownload
             {
                 Console.WriteLine("-startdate or -lastdays is required");
                 Environment.Exit(1);
-            }            
+            }
 
             // Connect to Ring
             Console.WriteLine("Connecting to Ring services");
@@ -129,7 +144,7 @@ namespace KoenZomers.Ring.RecordingDownload
                     // Authenticate again using the two factor token
                     await session.Authenticate(twoFactorAuthCode: token);
                 }
-                catch(Api.Exceptions.ThrottledException)
+                catch (Api.Exceptions.ThrottledException)
                 {
                     Console.WriteLine("Two factor authentication is required, but too many tokens have been requested recently. Wait for a few minutes and try connecting again.");
                     Environment.Exit(1);
@@ -151,7 +166,7 @@ namespace KoenZomers.Ring.RecordingDownload
             {
                 // Retrieve all available Ring devices and list them
                 Console.Write("Retrieving all devices... ");
-                
+
                 var devices = await session.GetRingDevices();
 
                 Console.WriteLine($"{devices.Doorbots.Count + devices.AuthorizedDoorbots.Count + devices.StickupCams.Count} found");
@@ -224,82 +239,98 @@ namespace KoenZomers.Ring.RecordingDownload
                 // Ensure we have items to download
                 if (doorbotHistory.Count == 0)
                 {
-                    Console.WriteLine("No items found. Done.");
+                    Console.WriteLine("No recordings found. Quitting.");
                     Environment.Exit(0);
                 }
 
                 Console.WriteLine($"{doorbotHistory.Count} item{(doorbotHistory.Count == 1 ? "" : "s")} found, downloading to {configuration.OutputPath}");
+                Console.WriteLine("---");
+                Log($"Beginning downloads...");
+                await Task.Delay(1000);
+                var startTime = DateTime.Now;
 
-                for (var itemCount = 0; itemCount < doorbotHistory.Count; itemCount++)
+                // Sort videos by oldest to newest (to start downloading the oldest items first)
+                var sortedDoorbotHistory = doorbotHistory.OrderBy(h => h.CreatedAtDateTime).ToList();
+
+                List<Task> downloadTasks = new List<Task>();
+
+                for (var itemCount = 0; itemCount < sortedDoorbotHistory.Count; itemCount++)
                 {
-                    var doorbotHistoryItem = doorbotHistory[itemCount];
-
-                    if (configuration.ResumeFromLastDownload && !string.IsNullOrWhiteSpace(LastdownloadedRecordingId) && doorbotHistoryItem.Id.HasValue && doorbotHistoryItem.Id.Value.ToString() == LastdownloadedRecordingId)
-                    {
-                        Console.WriteLine($"Reached previously downloaded recording with Id {LastdownloadedRecordingId}. Done.");
-                        Environment.Exit(0);
-                    }
+                    var doorbotHistoryItem = sortedDoorbotHistory[itemCount];
+                    var localItemCount = itemCount + 1;
 
                     // If no valid date on the item, skip it and continue with the next
                     if (!doorbotHistoryItem.CreatedAtDateTime.HasValue) continue;
 
                     // Construct the filename and path where to save the file
-                    var downloadFileName = $"{doorbotHistoryItem.CreatedAtDateTime.Value:yyyy-MM-dd HH-mm-ss} ({doorbotHistoryItem.Id}).mp4";
+                    var downloadFileName = $"{doorbotHistoryItem.Id}_{doorbotHistoryItem.CreatedAtDateTime.Value:yyyy_MM_dd-HH_mm_ss}.mp4";
                     var downloadFullPath = Path.Combine(configuration.OutputPath, downloadFileName);
 
-                    short attempt = 0;
-                    do
+                    // Create a new task for each download
+                    Task downloadTask = Task.Run(async () =>
                     {
-                        attempt++;
-
-                        Console.Write($"{itemCount + 1} - {downloadFileName}... ");
+                        // Wait for our turn to proceed with download (concurrency control)
+                        await semaphoreSlim.WaitAsync();
 
                         try
                         {
-                            // Download the recording
-                            await session.GetDoorbotHistoryRecording(doorbotHistoryItem, downloadFullPath);
-
-                            Console.WriteLine($"done ({new FileInfo(downloadFullPath).Length / 1048576} MB)");
-
-                            if (itemCount == 0 && doorbotHistoryItem.Id.HasValue)
+                            // Check if the file already exists
+                            if (File.Exists(downloadFullPath))
                             {
-                                // Store the Id of this historical item as the most recent downloaded item so it can download up to this one on a next attempt
-                                LastdownloadedRecordingId = doorbotHistoryItem.Id.Value.ToString();
-                            }
-                            break;
-                        }
-                        catch (System.Net.WebException e)
-                        {
-                            if (e.Response != null)
-                            {
-                                var response = new StreamReader(e.Response.GetResponseStream()).ReadToEnd();
-
-                                Console.Write($"failed ({e.Message} - {response})");
+                                Log($"Video {localItemCount}/{doorbotHistory.Count}: {downloadFileName} already exists. Skipping download.");
                             }
                             else
                             {
-                                Console.Write($"failed ({e.Message})");
+                                short attempt = 0;
+                                bool success = false;
+                                while (attempt <= configuration.MaxRetries && !success)
+                                {
+                                    attempt++;
+
+                                    //Log($"Task {localItemCount}: Starting download for {downloadFileName}... ");
+
+                                    try
+                                    {
+                                        // Download the recording
+                                        await session.GetDoorbotHistoryRecording(doorbotHistoryItem, downloadFullPath);
+                                        Log($"Video {localItemCount}/{doorbotHistory.Count}: Downloaded -> {downloadFileName} ({new FileInfo(downloadFullPath).Length / 1048576} MB)");
+                                        success = true;
+
+                                        // Store the Id of this historical item as the most recent downloaded item so it can download up to this one on a next attempt
+                                        if ((localItemCount - 1) == 0 && doorbotHistoryItem.Id.HasValue)
+                                        {
+                                            LastdownloadedRecordingId = doorbotHistoryItem.Id.Value.ToString();
+                                        }
+                                    }
+                                    catch (Exception e)
+                                    {
+                                        Log($"Video {localItemCount}/{doorbotHistory.Count}: Download failed -> {downloadFileName} :: ({e.Message}). Retrying attempt {attempt}/{configuration.MaxRetries}");
+                                        await Task.Delay(1000); // Wait for 1 second before retrying
+                                    }
+                                }
                             }
                         }
-                        catch (Exception e)
+                        finally
                         {
-                            Console.Write($"failed ({e.Message})");
+                            // Release the semaphore once the download is complete or has failed
+                            semaphoreSlim.Release();
                         }
+                    });
 
-                        if (attempt >= configuration.MaxRetries)
-                        {
-                            Console.WriteLine(". Giving up.");
-                        }
-                        else
-                        {
-                            Console.WriteLine($". Retrying {attempt + 1}/{configuration.MaxRetries}.");
-                        }
-                    } while (attempt < configuration.MaxRetries);
+                    downloadTasks.Add(downloadTask);
+
+                    // Wait for 1 second before starting the next download task
+                    await Task.Delay(1000);
                 }
-            }
 
-            Console.WriteLine("Done");
-            Environment.Exit(0);
+                // Wait for all tasks to complete
+                await Task.WhenAll(downloadTasks);
+
+                // Calculate and display the time taken for all video downloads
+                var elapsedTime = DateTime.Now - startTime;
+                Log($"Finished in {(int)elapsedTime.TotalSeconds} seconds.");
+                Environment.Exit(0);
+            }
         }
 
         /// <summary>
@@ -333,7 +364,7 @@ namespace KoenZomers.Ring.RecordingDownload
             if (args.Contains("-list"))
             {
                 configuration.ListBots = true;
-            }            
+            }
 
             if (args.Contains("-type"))
             {
