@@ -251,6 +251,7 @@ namespace KoenZomers.Ring.RecordingDownload
                 Log($"Beginning downloads...");
                 await Task.Delay(1000);
                 var startTime = DateTime.Now;
+                var skippedCount = 0;
 
                 // Ensure the downloads directory exists by creating it
                 Directory.CreateDirectory(configuration.OutputPath);
@@ -284,6 +285,7 @@ namespace KoenZomers.Ring.RecordingDownload
                             if (File.Exists(downloadFullPath))
                             {
                                 Log($"Video {localItemCount}/{doorbotHistory.Count}: {downloadFileName} already exists. Skipping download.");
+                                skippedCount++;
                             }
                             else
                             {
@@ -334,7 +336,7 @@ namespace KoenZomers.Ring.RecordingDownload
 
                 // Calculate and display the time taken for all video downloads
                 var elapsedTime = DateTime.Now - startTime;
-                Log($"Finished downloading {doorbotHistory.Count} item{(doorbotHistory.Count == 1 ? "" : "s")} in {(int)elapsedTime.TotalSeconds} seconds.");
+                Log($"Finished downloading {doorbotHistory.Count} item{(doorbotHistory.Count == 1 ? "" : "s")} ({skippedCount} skipped) in {(int)elapsedTime.TotalSeconds} seconds.");
                 Environment.Exit(0);
             }
         }
