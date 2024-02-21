@@ -14,7 +14,7 @@ namespace KoenZomers.Ring.RecordingDownload
     class Program
     {
         // Initialize semaphore for managing concurrent tasks 
-        static SemaphoreSlim semaphoreSlim = new SemaphoreSlim(10); // Allows up to 10 concurrent tasks
+        static SemaphoreSlim semaphoreSlim;
         // Log queue
         static ConcurrentQueue<string> logQueue = new ConcurrentQueue<string>();
 
@@ -114,6 +114,9 @@ namespace KoenZomers.Ring.RecordingDownload
                 Environment.Exit(1);
             }
 
+            // Initialize semaphore and with max threads limit
+            semaphoreSlim = new SemaphoreSlim(configuration.MaxConcurrency);
+
             // Connect to Ring
             Console.WriteLine("Connecting to Ring services");
             Session session;
@@ -203,7 +206,7 @@ namespace KoenZomers.Ring.RecordingDownload
             else
             {
                 // Retrieve all sessions
-                Console.WriteLine($"Downloading {(string.IsNullOrWhiteSpace(configuration.Type) ? "all" : configuration.Type)} historical events between {configuration.StartDate.Value:dddd d MMMM yyyy HH:mm:ss} and {(configuration.EndDate.HasValue ? configuration.EndDate.Value.ToString("dddd d MMMM yyyy HH:mm:ss") : "now")}{(configuration.RingDeviceId.HasValue ? $" for Ring device {configuration.RingDeviceId.Value}" : "")}");
+                Console.WriteLine($"Downloading {(string.IsNullOrWhiteSpace(configuration.Type) ? "all" : configuration.Type)} historical events between {configuration.StartDate.Value:dddd d MMMM yyyy HH:mm:ss} and {(configuration.EndDate.HasValue ? configuration.EndDate.Value.ToString("dddd d MMMM yyyy HH:mm:ss") : "now")}{(configuration.RingDeviceId.HasValue ? $" for Ring device {configuration.RingDeviceId.Value}" : "")} using {configuration.MaxConcurrency} thread{(configuration.MaxConcurrency == 1 ? "" : "s")}");
 
                 List<Api.Entities.DoorbotHistoryEvent> doorbotHistory = null;
                 try
@@ -331,7 +334,7 @@ namespace KoenZomers.Ring.RecordingDownload
 
                 // Calculate and display the time taken for all video downloads
                 var elapsedTime = DateTime.Now - startTime;
-                Log($"Finished downloading {doorbotHistory.Count} items{(doorbotHistory.Count == 1 ? "" : "s")} in {(int)elapsedTime.TotalSeconds} seconds.");
+                Log($"Finished downloading {doorbotHistory.Count} item{(doorbotHistory.Count == 1 ? "" : "s")} in {(int)elapsedTime.TotalSeconds} seconds.");
                 Environment.Exit(0);
             }
         }
@@ -425,6 +428,15 @@ namespace KoenZomers.Ring.RecordingDownload
                 configuration.IgnoreCachedToken = true;
             }
 
+            if (args.Contains("-threads"))
+            {
+                int index = args.IndexOf("-threads") + 1;
+                if (index < args.Count && int.TryParse(args[index], out int threads))
+                {
+                    configuration.MaxConcurrency = threads;
+                }
+            }
+
             return configuration;
         }
 
@@ -448,6 +460,7 @@ namespace KoenZomers.Ring.RecordingDownload
             Console.WriteLine("deviceid: Id of the Ring device to download the recordings for (optional, will download for all registered Ring devices by default)");
             Console.WriteLine("resumefromlastdownload: If provided, it will try to start downloading recordings since the last successful download");
             Console.WriteLine("ignorecachedtoken: If provided, it will not use the cached token that may exist from a previous session");
+            Console.WriteLine("threads: If provided, it will set the maximum number of concurrent download tasks allowed at a time. Defaults to 10.");
             Console.WriteLine();
             Console.WriteLine("Example:");
             Console.WriteLine("   RingRecordingDownload -username my@email.com -password mypassword -list");

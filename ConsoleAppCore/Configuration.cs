@@ -61,5 +61,12 @@ namespace KoenZomers.Ring.RecordingDownload
         /// Indicates if a token that may exist from previous sessions should not be used for authentication
         /// </summary>
         public bool IgnoreCachedToken;
+
+        /// <summary>
+        /// Maximum number of concurrent download tasks allowed.
+        /// This controls the level of parallelism for downloading recordings.
+        /// The default value is 10 if not specified otherwise.
+        /// </summary>
+        public int MaxConcurrency { get; set; } = 10;
     }
 }
