@@ -252,6 +252,7 @@ namespace KoenZomers.Ring.RecordingDownload
                 await Task.Delay(1000);
                 var startTime = DateTime.Now;
                 var skippedCount = 0;
+                var erroredCount = 0;
 
                 // Ensure the downloads directory exists by creating it
                 Directory.CreateDirectory(configuration.OutputPath);
@@ -313,8 +314,17 @@ namespace KoenZomers.Ring.RecordingDownload
                                     catch (Exception e)
                                     {
                                         Log($"Video {localItemCount}/{doorbotHistory.Count}: Download failed -> {downloadFileName} :: ({e.Message}). Retrying attempt {attempt}/{configuration.MaxRetries}");
-                                        await Task.Delay(1000); // Wait for 1 second before retrying
+                                        // Wait for 1 second before retrying
+                                        await Task.Delay(1000);
                                     }
+                                }
+
+                                // Record skipped video count due to download error
+                                if (!success)
+                                {
+                                    skippedCount++;
+                                    erroredCount++;
+                                    Log($"Video {localItemCount}/{doorbotHistory.Count}: Reached max retries. Skipping download.");
                                 }
                             }
                         }
@@ -336,7 +346,7 @@ namespace KoenZomers.Ring.RecordingDownload
 
                 // Calculate and display the time taken for all video downloads
                 var elapsedTime = DateTime.Now - startTime;
-                Log($"Finished downloading {doorbotHistory.Count} item{(doorbotHistory.Count == 1 ? "" : "s")} ({skippedCount} skipped) in {(int)elapsedTime.TotalSeconds} seconds.");
+                Log($"Finished downloading {doorbotHistory.Count} item{(doorbotHistory.Count == 1 ? "" : "s")} ({skippedCount} skipped - {erroredCount} due to errors) in {(int)elapsedTime.TotalSeconds} seconds.");
                 Environment.Exit(0);
             }
         }
