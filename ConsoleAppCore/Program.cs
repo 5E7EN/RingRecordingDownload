@@ -292,7 +292,7 @@ namespace KoenZomers.Ring.RecordingDownload
                             {
                                 short attempt = 0;
                                 bool success = false;
-                                while (attempt <= configuration.MaxRetries && !success)
+                                while (attempt < configuration.MaxRetries && !success)
                                 {
                                     attempt++;
 
